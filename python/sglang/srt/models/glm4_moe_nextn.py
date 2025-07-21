@@ -12,7 +12,7 @@
 # limitations under the License.
 # ==============================================================================
 
-"""Inference-only DeepSeek NextN Speculative Decoding."""
+"""Inference-only Glm4Moe NextN Speculative Decoding."""
 import logging
 from typing import Iterable, Optional, Tuple
 
@@ -31,7 +31,7 @@ from sglang.srt.layers.vocab_parallel_embedding import (
 )
 from sglang.srt.managers.schedule_batch import global_server_args_dict
 from sglang.srt.model_executor.forward_batch_info import ForwardBatch
-from sglang.srt.models.glm4_moe import GLM4MoEDecoderLayer, GLM4MoEForCausalLM
+from sglang.srt.models.glm4_moe import Glm4MoeDecoderLayer, Glm4MoeForCausalLM
 from sglang.srt.models.deepseek_nextn import DeepseekModelNextN, DeepseekV3ForCausalLMNextN
 from sglang.srt.utils import BumpAllocator, add_prefix
 
@@ -39,7 +39,7 @@ from sglang.srt.utils import BumpAllocator, add_prefix
 logger = logging.getLogger(__name__)
 
 
-class GLM4MoENextN(nn.Module):
+class Glm4MoeNextN(nn.Module):
     def __init__(
         self,
         config: PretrainedConfig,
@@ -61,7 +61,7 @@ class GLM4MoENextN(nn.Module):
 
         self.eh_proj = nn.Linear(2 * config.hidden_size, config.hidden_size, bias=False)
 
-        self.decoder = GLM4MoEDecoderLayer(
+        self.decoder = Glm4MoeDecoderLayer(
             config,
             0,
             quant_config=quant_config,
@@ -112,7 +112,7 @@ class GLM4MoENextN(nn.Module):
         return hidden_states
 
 
-class GLM4MoEForCausalLMNextN(GLM4MoEForCausalLM):
+class Glm4MoeForCausalLMNextN(Glm4MoeForCausalLM):
 
     def __init__(
         self,
@@ -124,10 +124,10 @@ class GLM4MoEForCausalLMNextN(GLM4MoEForCausalLM):
         self.config = config
         self.tp_size = get_tensor_model_parallel_world_size()
         self.quant_config = quant_config
-        self.determine_num_fused_shared_experts("GLM4MoEForCausalLMNextN")
+        self.determine_num_fused_shared_experts("Glm4MoeForCausalLMNextN")
         self.end_layer = config.num_nextn_predict_layers
 
-        self.model = GLM4MoENextN(
+        self.model = Glm4MoeNextN(
             config, quant_config, prefix=add_prefix("model", prefix)
         )
 
@@ -164,4 +164,4 @@ class GLM4MoEForCausalLMNextN(GLM4MoEForCausalLM):
         super().load_weights(weights, is_nextn=True)
 
 
-EntryClass = [GLM4MoEForCausalLMNextN]
+EntryClass = [Glm4MoeForCausalLMNextN]
