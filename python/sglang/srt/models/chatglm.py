@@ -75,7 +75,7 @@ class GLMAttention(nn.Module):
             # the KV heads across multiple tensor parallel GPUs.
             assert tp_size % self.total_num_kv_heads == 0
         self.num_kv_heads = max(1, self.total_num_kv_heads // tp_size)
-        self.head_dim = config.kv_channels
+        self.head_dim = config.hidden_size // self.total_num_heads
         self.q_size = self.num_heads * self.head_dim
         self.kv_size = self.num_kv_heads * self.head_dim
         self.scaling = self.head_dim**-0.5
@@ -96,28 +96,16 @@ class GLMAttention(nn.Module):
             quant_config=quant_config,
             prefix=add_prefix("dense", prefix),
         )
-        layer_norm_func = RMSNorm if config.rmsnorm else LayerNorm
-        self.use_qk_layernorm = getattr(config, "qk_layernorm", False)
-        if self.use_qk_layernorm:
-            self.q_layernorm = layer_norm_func(
-                config.kv_channels, eps=config.layernorm_epsilon
-            )
-            self.k_layernorm = layer_norm_func(
-                config.kv_channels, eps=config.layernorm_epsilon
-            )
 
         # https://huggingface.co/THUDM/chatglm3-6b-32k/blob/e210410255278dd9d74463cf396ba559c0ef801c/modeling_chatglm.py#L141
         rope_ratio = getattr(config, "rope_ratio", 1.0)
         max_positions = getattr(config, "seq_length", 8192)
-        rotary_percent = getattr(config, "rotary_percent", 0.5)
-        rotary_dim = int(self.head_dim * rotary_percent)
-        is_neox_style = not getattr(config, "original_rope", True)
         self.rotary_emb = get_rope(
             self.head_dim,
-            rotary_dim=rotary_dim,
+            rotary_dim=self.head_dim // 2,
             max_position=max_positions,
             base=10000 * rope_ratio,
-            is_neox_style=is_neox_style,
+            is_neox_style=False,
         )
         self.attn = RadixAttention(
             self.num_heads,
@@ -137,10 +125,6 @@ class GLMAttention(nn.Module):
     ) -> torch.Tensor:
         qkv, _ = self.query_key_value(hidden_states)
         q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
-        if self.use_qk_layernorm:
-            orgin_q_shape, origin_k_shape = q.shape, k.shape
-            q = self.q_layernorm(q.contiguous().view(-1, self.head_dim)).view(orgin_q_shape)
-            k = self.k_layernorm(k.contiguous().view(-1, self.head_dim)).view(origin_k_shape)
         q, k = self.rotary_emb(position_ids, q, k)
         context_layer = self.attn(
             q,
@@ -237,17 +221,6 @@ class GLMBlock(nn.Module):
             config.hidden_size, eps=config.layernorm_epsilon
         )
 
-        self.use_post_self_attn_layernorm = getattr(config, "post_self_attn_layernorm", False)
-        if self.use_post_self_attn_layernorm:
-            self.post_self_attn_layernorm = layer_norm_func(
-                config.hidden_size, eps=config.layernorm_epsilon
-            )
-        self.use_post_mlp_layernorm = getattr(config, "post_mlp_layernorm", False)
-        if self.use_post_mlp_layernorm:
-            self.post_mlp_layernorm = layer_norm_func(
-                config.hidden_size, eps=config.layernorm_epsilon
-            )
-
         # MLP
         self.mlp = GLMMLP(config, quant_config, prefix=add_prefix("mlp", prefix))
 
@@ -266,8 +239,7 @@ class GLMBlock(nn.Module):
             position_ids=position_ids,
             forward_batch=forward_batch,
         )
-        if self.use_post_self_attn_layernorm:
-            attention_output = self.post_self_attn_layernorm(attention_output)
+
         # Residual connection.
         if self.apply_residual_connection_post_layernorm:
             residual = layernorm_output
@@ -285,10 +257,8 @@ class GLMBlock(nn.Module):
         else:
             residual = layernorm_input
 
-        mlp_output = self.mlp(layernorm_output)
-        if self.use_post_mlp_layernorm:
-            mlp_output = self.post_mlp_layernorm(mlp_output)
-        output = mlp_output + residual
+        output = self.mlp(layernorm_output) + residual
+
         return output
 
 
