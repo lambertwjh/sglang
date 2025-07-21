@@ -15,14 +15,11 @@
 """Inference-only Glm4Moe model compatible with HuggingFace weights"""
 
 import logging
-import os
-from enum import IntEnum, auto
 from typing import Any, Dict, Iterable, Optional, Tuple
 
 import torch
 import torch.nn.functional as F
 from torch import nn
-from tqdm import tqdm
 from transformers import PretrainedConfig
 
 from sglang.srt.distributed import (
@@ -79,6 +76,10 @@ from sglang.srt.layers.vocab_parallel_embedding import (
 from sglang.srt.managers.schedule_batch import global_server_args_dict
 from sglang.srt.model_executor.forward_batch_info import ForwardBatch
 from sglang.srt.model_loader.weight_utils import default_weight_loader
+from sglang.srt.models.deepseek_v2 import DeepseekV2DecoderLayer, DeepseekV2ForCausalLM
+from sglang.srt.models.deepseek_v2 import DeepseekV2MLP as Glm4MoeMLP
+from sglang.srt.models.deepseek_v2 import DeepseekV2Model, DeepseekV2MoE
+from sglang.srt.models.qwen3_moe import Qwen3MoeAttention
 from sglang.srt.two_batch_overlap import (
     MaybeTboDeepEPDispatcher,
     model_forward_maybe_tbo,
@@ -100,15 +101,6 @@ from sglang.srt.utils import (
     log_info_on_rank0,
     use_intel_amx_backend,
 )
-from sglang.srt.models.deepseek_v2 import (
-    DeepseekV2MLP as Glm4MoeMLP,
-    # DeepseekV2MoE as Glm4MoeSparseMoeBlock,
-    DeepseekV2MoE,
-    DeepseekV2DecoderLayer,
-    DeepseekV2Model,
-    DeepseekV2ForCausalLM
-)
-from sglang.srt.models.qwen3_moe import Qwen3MoeAttention
 
 _is_hip = is_hip()
 _is_cuda = is_cuda()
@@ -117,16 +109,7 @@ _use_aiter = get_bool_env_var("SGLANG_USE_AITER") and _is_hip
 _is_cpu_amx_available = cpu_has_amx_support()
 _is_cpu = is_cpu()
 _device_sm = get_device_sm()
-# if _is_cuda:
-#     from sgl_kernel import awq_dequantize, bmm_fp8, merge_state_v2
 
-# else:
-#     from vllm._custom_ops import awq_dequantize
-
-# if _is_hip:
-#     from sglang.srt.layers.attention.triton_ops.rocm_mla_decode_rope import (
-#         decode_attention_fwd_grouped_rope,
-#     )
 if _is_cuda:
     from sgl_kernel import (
         awq_dequantize,
@@ -150,8 +133,6 @@ if _use_aiter:
 logger = logging.getLogger(__name__)
 
 
-
-
 class Glm4MoeAttention(Qwen3MoeAttention):
     def __init__(
         self,
@@ -161,7 +142,7 @@ class Glm4MoeAttention(Qwen3MoeAttention):
         layer_id: int = 0,
         rope_theta: float = 10000,
         rope_scaling: Optional[Dict[str, Any]] = None,
-        rotary_percent: float = 0.5, # different from qwen
+        rotary_percent: float = 0.5,  # different from qwen
         max_position_embeddings: int = 8192,
         head_dim: Optional[int] = None,
         rms_norm_eps: float = 1e-06,
@@ -272,7 +253,8 @@ class Glm4MoeGate(nn.Module):
         self.weight = nn.Parameter(
             torch.empty((config.n_routed_experts, config.hidden_size))
         )
-        # ? `topk_method` is moved.
+        # TODO: removes comments
+        # ? `config.topk_method` is moved.
         self.e_score_correction_bias = nn.Parameter(
             torch.empty((config.n_routed_experts))
         )
@@ -460,7 +442,6 @@ class Glm4MoeSparseMoeBlock(DeepseekV2MoE):
         self._enable_deepep_moe = global_server_args_dict["enable_deepep_moe"]
 
 
-
 class Glm4MoeDecoderLayer(DeepseekV2DecoderLayer):
     def __init__(
         self,
@@ -611,7 +592,6 @@ class Glm4MoeModel(DeepseekV2Model):
         self.dp_size = get_local_attention_dp_size()
 
 
-
 class Glm4MoeForCausalLM(DeepseekV2ForCausalLM):
 
     def __init__(
@@ -625,6 +605,7 @@ class Glm4MoeForCausalLM(DeepseekV2ForCausalLM):
         self.config = config
         self.tp_size = get_tensor_model_parallel_world_size()
         self.quant_config = quant_config
+        # ? Does Glm4Moe support fused shared experts?
         self.determine_num_fused_shared_experts("Glm4MoeForCausalLM")
         self.model = Glm4MoeModel(
             config, quant_config, prefix=add_prefix("model", prefix)
@@ -745,11 +726,7 @@ class Glm4MoeForCausalLM(DeepseekV2ForCausalLM):
                 else [nextn_layer_id]
             )
 
-            for moe_layer in tqdm(
-                moe_layers,
-                desc=f"Cloning {self.num_fused_shared_experts} "
-                "shared expert into MoE",
-            ):
+            for moe_layer in moe_layers:
                 for suffix in suffix_list:
                     shared_expert_weight_name = (
                         f"model.layers.{moe_layer}.mlp.shared_experts.{suffix}"
@@ -795,13 +772,7 @@ class Glm4MoeForCausalLM(DeepseekV2ForCausalLM):
 
         params_dict = dict(self.named_parameters())
         weight_names = []
-        for name, loaded_weight in tqdm(
-            weights,
-            desc=f"[Rank {torch.distributed.get_rank()}] running weight_loaders",
-            position=torch.distributed.get_rank(),
-            ncols=0,
-            mininterval=1,
-        ):
+        for name, loaded_weight in weights:
             weight_names.append(name)
 
             if not is_nextn:

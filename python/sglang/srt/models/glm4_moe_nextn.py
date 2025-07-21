@@ -31,10 +31,12 @@ from sglang.srt.layers.vocab_parallel_embedding import (
 )
 from sglang.srt.managers.schedule_batch import global_server_args_dict
 from sglang.srt.model_executor.forward_batch_info import ForwardBatch
+from sglang.srt.models.deepseek_nextn import (
+    DeepseekModelNextN,
+    DeepseekV3ForCausalLMNextN,
+)
 from sglang.srt.models.glm4_moe import Glm4MoeDecoderLayer, Glm4MoeForCausalLM
-from sglang.srt.models.deepseek_nextn import DeepseekModelNextN, DeepseekV3ForCausalLMNextN
 from sglang.srt.utils import BumpAllocator, add_prefix
-
 
 logger = logging.getLogger(__name__)
 
@@ -124,6 +126,7 @@ class Glm4MoeForCausalLMNextN(Glm4MoeForCausalLM):
         self.config = config
         self.tp_size = get_tensor_model_parallel_world_size()
         self.quant_config = quant_config
+        # ? Does Glm4Moe support fused shared experts?
         self.determine_num_fused_shared_experts("Glm4MoeForCausalLMNextN")
         self.end_layer = config.num_nextn_predict_layers
 
