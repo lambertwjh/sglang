@@ -45,7 +45,6 @@ from sglang.srt.layers.logits_processor import LogitsProcessor
 from sglang.srt.layers.moe.ep_moe.layer import EPMoE
 from sglang.srt.layers.moe.fused_moe_triton import FusedMoE
 from sglang.srt.layers.moe.router import fused_moe_router_shim
-from sglang.srt.layers.moe.topk import TopK
 from sglang.srt.layers.quantization.base_config import QuantizationConfig
 from sglang.srt.layers.radix_attention import RadixAttention
 from sglang.srt.layers.rotary_embedding import get_rope
@@ -109,12 +108,6 @@ class Grok1MoE(nn.Module):
             fused_moe_router_shim, self.router_logit_softcapping
         )
 
-        self.topk = TopK(
-            top_k=top_k,
-            renormalize=False,
-            custom_routing_function=custom_routing_function,
-        )
-
         kwargs = {}
         if global_server_args_dict["enable_ep_moe"]:
             MoEImpl = EPMoE
@@ -131,16 +124,17 @@ class Grok1MoE(nn.Module):
             hidden_size=hidden_size,
             intermediate_size=intermediate_size,
             params_dtype=params_dtype,
+            renormalize=False,
             quant_config=quant_config,
             tp_size=tp_size,
+            custom_routing_function=custom_routing_function,
             activation="gelu",
             **kwargs,
         )
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         # need to assert self.gate.quant_method is unquantized
-        topk_output = self.topk(hidden_states, self.gate.weight)
-        return self.experts(hidden_states, topk_output)
+        return self.experts(hidden_states, self.gate.weight)
 
 
 class Grok1Attention(nn.Module):

@@ -17,11 +17,9 @@ class MiniCPMMultimodalProcessor(BaseMultimodalProcessor):
 
     def __init__(self, hf_config, server_args, _processor):
         super().__init__(hf_config, server_args, _processor)
-        self.mm_tokens = MultimodalSpecialTokens(
-            image_token="(<image>./</image>)",
-            audio_token="(<audio>./</audio>)",
-            video_token="(<video>./</video>)",
-        ).build(_processor)
+        self.image_token = "(<image>./</image>)"
+        self.audio_token = "(<audio>./</audio>)"
+        self.video_token = "(<video>./</video>)"
 
     async def process_mm_data_async(
         self,
@@ -37,7 +35,11 @@ class MiniCPMMultimodalProcessor(BaseMultimodalProcessor):
             max_req_input_len=max_req_input_len,
             audio_data=audio_data,
             image_data=image_data,
-            multimodal_tokens=self.mm_tokens,
+            multimodal_tokens=MultimodalSpecialTokens(
+                image_token=self.image_token,
+                video_token=self.video_token,
+                audio_token=self.audio_token,
+            ),
         )
         if base_output is None:
             return None
@@ -112,7 +114,7 @@ class MiniCPMMultimodalProcessor(BaseMultimodalProcessor):
 
         if len(pixel_values) != 0:
             item = MultimodalDataItem(
-                feature=pixel_values,
+                pixel_values=pixel_values,
                 offsets=image_offsets,
                 tgt_size=tgt_sizes_flat,
                 modality=Modality.IMAGE,
@@ -133,7 +135,7 @@ class MiniCPMMultimodalProcessor(BaseMultimodalProcessor):
             else:
                 audio_offsets = None
             item = MultimodalDataItem(
-                feature=[res["audio_features"]],
+                audio_features=[res["audio_features"]],
                 audio_feature_lens=res["audio_feature_lens"],
                 offsets=audio_offsets,
                 modality=Modality.AUDIO,

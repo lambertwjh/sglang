@@ -64,9 +64,8 @@ class TestCase:
     base: str
     max_loras_per_batch: int
     all_adapters: List[str]
+    initial_adapters: List[str]
     op_sequence: List[Operation]
-    initial_adapters: Optional[List[str]] = None
-    enable_lora: Optional[bool] = None
     max_lora_rank: Optional[int] = None
     lora_target_modules: Optional[List] = None
     max_new_tokens: int = 32
@@ -167,64 +166,6 @@ BASIC_TESTS = [
                     [
                         "philschmid/code-llama-3-1-8b-text-to-sql-lora",
                         "pbevan11/llama-3.1-8b-ocr-correction",
-                    ]
-                ),
-            ),
-        ],
-    ),
-    TestCase(
-        description="dynamic lora update without initial lora_paths",
-        base="meta-llama/Llama-3.1-8B-Instruct",
-        enable_lora=True,
-        max_lora_rank=256,
-        lora_target_modules=["all"],
-        max_loras_per_batch=4,
-        all_adapters=[
-            "philschmid/code-llama-3-1-8b-text-to-sql-lora",
-            "Nutanix/Meta-Llama-3.1-8B-Instruct_lora_4_alpha_16",
-            "pbevan11/llama-3.1-8b-ocr-correction",
-        ],
-        op_sequence=[
-            Operation(
-                type=OperationType.LOAD,
-                data="philschmid/code-llama-3-1-8b-text-to-sql-lora",
-            ),
-            Operation(
-                type=OperationType.LOAD,
-                data="Nutanix/Meta-Llama-3.1-8B-Instruct_lora_4_alpha_16",
-            ),
-            Operation(
-                type=OperationType.LOAD,
-                data="pbevan11/llama-3.1-8b-ocr-correction",
-            ),
-            Operation(
-                type=OperationType.FORWARD,
-                data=create_batch_data(
-                    [
-                        "philschmid/code-llama-3-1-8b-text-to-sql-lora",
-                        "Nutanix/Meta-Llama-3.1-8B-Instruct_lora_4_alpha_16",
-                        "pbevan11/llama-3.1-8b-ocr-correction",
-                        None,
-                    ]
-                ),
-            ),
-            Operation(
-                type=OperationType.UNLOAD,
-                data="philschmid/code-llama-3-1-8b-text-to-sql-lora",
-            ),
-            Operation(
-                type=OperationType.FORWARD,
-                data=create_batch_data("philschmid/code-llama-3-1-8b-text-to-sql-lora"),
-                expected_error="not loaded",
-            ),
-            Operation(
-                type=OperationType.FORWARD,
-                data=create_batch_data(
-                    [
-                        None,
-                        "Nutanix/Meta-Llama-3.1-8B-Instruct_lora_4_alpha_16",
-                        "pbevan11/llama-3.1-8b-ocr-correction",
-                        None,
                     ]
                 ),
             ),
@@ -430,7 +371,7 @@ TARGET_MODULE_TESTS = [
             Operation(
                 type=OperationType.LOAD,
                 data="Nutanix/Meta-Llama-3.1-8B-Instruct_lora_4_alpha_16",
-                expected_error="incompatible",
+                expected_error="updating LoRA shapes",
             ),
             Operation(
                 type=OperationType.FORWARD,
@@ -490,7 +431,7 @@ MAX_LORA_RANK_TESTS = [
             Operation(
                 type=OperationType.LOAD,
                 data="philschmid/code-llama-3-1-8b-text-to-sql-lora",
-                expected_error="incompatible",
+                expected_error="updating LoRA shapes",
             ),
             Operation(
                 type=OperationType.FORWARD,
@@ -529,7 +470,7 @@ MAX_LORA_RANK_TESTS = [
             Operation(
                 type=OperationType.LOAD,
                 data="philschmid/code-llama-3-1-8b-text-to-sql-lora",
-                expected_error="incompatible",
+                expected_error="updating LoRA shapes",
             ),
             Operation(
                 type=OperationType.FORWARD,
@@ -580,7 +521,6 @@ class LoRAUpdateTestSessionBase:
         lora_paths: list[str],
         max_loras_per_batch: int,
         max_lora_rank: Optional[int],
-        enable_lora: Optional[bool] = None,
         lora_target_modules: Optional[List[str]] = None,
         lora_backend: str = "triton",
         disable_cuda_graph: bool = False,
@@ -595,9 +535,8 @@ class LoRAUpdateTestSessionBase:
         self.lora_backend = lora_backend
         self.disable_cuda_graph = disable_cuda_graph
         self.cuda_graph_max_bs = cuda_graph_max_bs
-        self.enable_lora = enable_lora
 
-        self.expected_adapters = set(lora_paths or [])
+        self.expected_adapters = set(lora_paths)
         self.handle = None  # Will be set in __enter__
 
     def __enter__(self):
@@ -657,7 +596,6 @@ class LoRAUpdateEngineTestSession(LoRAUpdateTestSessionBase):
             disable_cuda_graph=self.disable_cuda_graph,
             cuda_graph_max_bs=self.cuda_graph_max_bs,
             disable_radix_cache=True,
-            enable_lora=self.enable_lora,
         )
         self.handle.__enter__()
         return self
@@ -752,6 +690,8 @@ class LoRAUpdateServerTestSession(LoRAUpdateTestSessionBase):
         other_args = [
             "--cuda-graph-max-bs",
             str(self.cuda_graph_max_bs),
+            "--lora-paths",
+            *self.lora_paths,
             "--max-loras-per-batch",
             str(self.max_loras_per_batch),
             "--lora-backend",
@@ -764,10 +704,6 @@ class LoRAUpdateServerTestSession(LoRAUpdateTestSessionBase):
             "--mem-fraction-static",
             str(MEM_FRACTION_STATIC),
         ]
-        if self.enable_lora:
-            other_args.append("--enable-lora")
-        if self.lora_paths:
-            other_args.extend(["--lora-paths"] + self.lora_paths)
         if self.disable_cuda_graph:
             other_args.append("--disable-cuda-graph")
         if self.max_lora_rank is not None:
@@ -900,7 +836,6 @@ class TestLoRADynamicUpdate(CustomTestCase):
         initial_adapters: List[str],
         max_loras_per_batch: int,
         op_sequence: List[Operation],
-        enable_lora: Optional[bool] = None,
         max_lora_rank: Optional[int] = None,
         lora_target_modules: Optional[List[str]] = None,
         max_new_tokens: int = 32,
@@ -919,7 +854,6 @@ class TestLoRADynamicUpdate(CustomTestCase):
             max_loras_per_batch=max_loras_per_batch,
             max_lora_rank=max_lora_rank,
             lora_target_modules=lora_target_modules,
-            enable_lora=enable_lora,
         ) as session:
             for op in op_sequence:
                 op_type = op.type
@@ -969,7 +903,6 @@ class TestLoRADynamicUpdate(CustomTestCase):
             dynamic_output = self._run_operation_sequence(
                 mode=mode,
                 initial_adapters=test_case.initial_adapters,
-                enable_lora=test_case.enable_lora,
                 base=test_case.base,
                 max_loras_per_batch=test_case.max_loras_per_batch,
                 op_sequence=test_case.op_sequence,
@@ -990,7 +923,6 @@ class TestLoRADynamicUpdate(CustomTestCase):
             static_output = self._run_operation_sequence(
                 mode=mode,
                 initial_adapters=test_case.all_adapters,
-                enable_lora=test_case.enable_lora,
                 base=test_case.base,
                 max_loras_per_batch=test_case.max_loras_per_batch,
                 op_sequence=forward_ops,

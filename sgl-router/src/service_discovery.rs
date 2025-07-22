@@ -1,4 +1,4 @@
-use crate::routers::RouterTrait;
+use crate::router::Router;
 
 use futures::{StreamExt, TryStreamExt};
 use k8s_openapi::api::core::v1::Pod;
@@ -176,7 +176,7 @@ impl PodInfo {
 
 pub async fn start_service_discovery(
     config: ServiceDiscoveryConfig,
-    router: Arc<dyn RouterTrait>,
+    router: Arc<Router>,
 ) -> Result<task::JoinHandle<()>, kube::Error> {
     // Don't initialize anything if service discovery is disabled
     if !config.enabled {
@@ -346,7 +346,7 @@ pub async fn start_service_discovery(
 async fn handle_pod_event(
     pod_info: &PodInfo,
     tracked_pods: Arc<Mutex<HashSet<PodInfo>>>,
-    router: Arc<dyn RouterTrait>,
+    router: Arc<Router>,
     port: u16,
     pd_mode: bool,
 ) {
@@ -379,32 +379,17 @@ async fn handle_pod_event(
                 pod_info.name, pod_info.pod_type, worker_url
             );
 
-            // Handle PD mode with specific pod types
             let result = if pd_mode && pod_info.pod_type.is_some() {
-                // Need to import PDRouter type
-                use crate::routers::pd_router::PDRouter;
-
-                // Try to downcast to PDRouter
-                if let Some(pd_router) = router.as_any().downcast_ref::<PDRouter>() {
-                    match &pod_info.pod_type {
-                        Some(PodType::Prefill) => pd_router
-                            .add_prefill_server(worker_url.clone(), pod_info.bootstrap_port)
-                            .await
-                            .map_err(|e| e.to_string()),
-                        Some(PodType::Decode) => pd_router
-                            .add_decode_server(worker_url.clone())
-                            .await
-                            .map_err(|e| e.to_string()),
-                        Some(PodType::Regular) | None => {
-                            // Fall back to regular add_worker for regular pods
-                            router.add_worker(&worker_url).await
-                        }
-                    }
+                // Use PD-aware worker management
+                if let Some(pod_type) = &pod_info.pod_type {
+                    router
+                        .add_pd_worker(&worker_url, pod_type.clone(), pod_info.bootstrap_port)
+                        .await
                 } else {
-                    Err("PD mode enabled but router is not a PDRouter".to_string())
+                    Err("Pod type is None in PD mode".to_string())
                 }
             } else {
-                // Regular mode or no pod type specified
+                // Fallback to regular worker management
                 router.add_worker(&worker_url).await
             };
 
@@ -427,7 +412,7 @@ async fn handle_pod_event(
 async fn handle_pod_deletion(
     pod_info: &PodInfo,
     tracked_pods: Arc<Mutex<HashSet<PodInfo>>>,
-    router: Arc<dyn RouterTrait>,
+    router: Arc<Router>,
     port: u16,
     pd_mode: bool,
 ) {
@@ -450,34 +435,18 @@ async fn handle_pod_deletion(
             pod_info.name, pod_info.pod_type, worker_url
         );
 
-        // Handle PD mode removal
         if pd_mode && pod_info.pod_type.is_some() {
-            use crate::routers::pd_router::PDRouter;
-
-            // Try to downcast to PDRouter for PD-specific removal
-            if let Some(pd_router) = router.as_any().downcast_ref::<PDRouter>() {
-                match &pod_info.pod_type {
-                    Some(PodType::Prefill) => {
-                        if let Err(e) = pd_router.remove_prefill_server(&worker_url).await {
-                            error!("Failed to remove prefill server {}: {}", worker_url, e);
-                        }
-                    }
-                    Some(PodType::Decode) => {
-                        if let Err(e) = pd_router.remove_decode_server(&worker_url).await {
-                            error!("Failed to remove decode server {}: {}", worker_url, e);
-                        }
-                    }
-                    Some(PodType::Regular) | None => {
-                        // Fall back to regular remove_worker
-                        router.remove_worker(&worker_url);
-                    }
+            // Use PD-aware worker removal
+            if let Some(pod_type) = &pod_info.pod_type {
+                if let Err(e) = router.remove_pd_worker(&worker_url, pod_type.clone()).await {
+                    error!(
+                        "Failed to remove PD worker {} from router: {}",
+                        worker_url, e
+                    );
                 }
-            } else {
-                // PD mode but not a PDRouter, use generic removal
-                router.remove_worker(&worker_url);
             }
         } else {
-            // Regular mode removal
+            // Fallback to regular worker removal
             router.remove_worker(&worker_url);
         }
     } else {
@@ -493,9 +462,11 @@ async fn handle_pod_deletion(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::router::Router;
     use k8s_openapi::api::core::v1::{Pod, PodCondition, PodSpec, PodStatus};
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
+    use std::sync::RwLock;
 
     // Helper function to create a Pod for testing PodInfo::from_pod
     fn create_k8s_pod(
@@ -575,14 +546,14 @@ mod tests {
     }
 
     // Helper to create a Router instance for testing event handlers
-    fn create_test_router() -> Arc<dyn RouterTrait> {
-        use crate::config::PolicyConfig;
-        use crate::policies::PolicyFactory;
-        use crate::routers::router::Router;
-
-        let policy = PolicyFactory::create_from_config(&PolicyConfig::Random);
-        let router = Router::new(vec![], policy, 5, 1).unwrap();
-        Arc::new(router) as Arc<dyn RouterTrait>
+    fn create_test_router() -> Arc<Router> {
+        let workers = Arc::new(RwLock::new(Vec::new()));
+        Arc::new(Router::Random {
+            workers,
+            timeout_secs: 5,
+            interval_secs: 1,
+            _health_checker: None,
+        })
     }
 
     // Helper to create a PD config for testing

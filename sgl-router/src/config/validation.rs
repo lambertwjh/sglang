@@ -255,8 +255,29 @@ impl ConfigValidator {
 
     /// Validate compatibility between different configuration sections
     fn validate_compatibility(config: &RouterConfig) -> ConfigResult<()> {
-        // All policies are now supported for both router types thanks to the unified trait design
-        // No mode/policy restrictions needed anymore
+        // Check mode and policy compatibility
+        match (&config.mode, &config.policy) {
+            (RoutingMode::Regular { .. }, PolicyConfig::PowerOfTwo { .. }) => {
+                // PowerOfTwo is only supported in PD mode
+                return Err(ConfigError::IncompatibleConfig {
+                    reason: "PowerOfTwo policy is only supported in PD disaggregated mode"
+                        .to_string(),
+                });
+            }
+            (RoutingMode::PrefillDecode { .. }, PolicyConfig::RoundRobin) => {
+                return Err(ConfigError::IncompatibleConfig {
+                    reason: "RoundRobin policy is not supported in PD disaggregated mode"
+                        .to_string(),
+                });
+            }
+            (RoutingMode::PrefillDecode { .. }, PolicyConfig::CacheAware { .. }) => {
+                return Err(ConfigError::IncompatibleConfig {
+                    reason: "CacheAware policy is not supported in PD disaggregated mode"
+                        .to_string(),
+                });
+            }
+            _ => {}
+        }
 
         // Check if service discovery is enabled for worker count validation
         let has_service_discovery = config.discovery.as_ref().map_or(false, |d| d.enabled);
@@ -438,8 +459,8 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_roundrobin_with_pd_mode() {
-        // RoundRobin with PD mode is now supported
+    fn test_validate_incompatible_policy() {
+        // RoundRobin with PD mode
         let config = RouterConfig::new(
             RoutingMode::PrefillDecode {
                 prefill_urls: vec![("http://prefill:8000".to_string(), None)],
@@ -449,12 +470,16 @@ mod tests {
         );
 
         let result = ConfigValidator::validate(&config);
-        assert!(result.is_ok());
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("RoundRobin policy is not supported in PD disaggregated mode"));
     }
 
     #[test]
     fn test_validate_cache_aware_with_pd_mode() {
-        // CacheAware with PD mode is now supported
+        // CacheAware with PD mode should fail
         let config = RouterConfig::new(
             RoutingMode::PrefillDecode {
                 prefill_urls: vec![("http://prefill:8000".to_string(), None)],
@@ -470,12 +495,16 @@ mod tests {
         );
 
         let result = ConfigValidator::validate(&config);
-        assert!(result.is_ok());
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("CacheAware policy is not supported in PD disaggregated mode"));
     }
 
     #[test]
     fn test_validate_power_of_two_with_regular_mode() {
-        // PowerOfTwo with Regular mode is now supported
+        // PowerOfTwo with Regular mode should fail
         let config = RouterConfig::new(
             RoutingMode::Regular {
                 worker_urls: vec![
@@ -489,6 +518,10 @@ mod tests {
         );
 
         let result = ConfigValidator::validate(&config);
-        assert!(result.is_ok());
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("PowerOfTwo policy is only supported in PD disaggregated mode"));
     }
 }

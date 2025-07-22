@@ -36,8 +36,6 @@ class TestPureDP(CustomTestCase):
                 "128",
                 "--max-running-requests",
                 "128",
-                "--mem-fraction-static",
-                "0.5",
             ],
         )
 
@@ -58,7 +56,7 @@ class TestPureDP(CustomTestCase):
         metrics = run_eval_few_shot_gsm8k(args)
         print(metrics)
 
-        self.assertGreater(metrics["accuracy"], 0.60)
+        self.assertGreater(metrics["accuracy"], 0.62)
 
 
 class TestHybridDPTP(CustomTestCase):
@@ -102,7 +100,7 @@ class TestHybridDPTP(CustomTestCase):
         metrics = run_eval_few_shot_gsm8k(args)
         print(metrics)
 
-        self.assertGreater(metrics["accuracy"], 0.60)
+        self.assertGreater(metrics["accuracy"], 0.62)
 
 
 class TestTP(CustomTestCase):
@@ -143,10 +141,10 @@ class TestTP(CustomTestCase):
         metrics = run_eval_few_shot_gsm8k(args)
         print(metrics)
 
-        self.assertGreater(metrics["accuracy"], 0.60)
+        self.assertGreater(metrics["accuracy"], 0.62)
 
 
-@unittest.skip("covered in test_deepep_large.py")
+# @unittest.skip("covered in test_deepep_large.py")
 class TestNoGatherdBuffer(CustomTestCase):
     @classmethod
     def setUpClass(cls):
@@ -191,7 +189,7 @@ class TestNoGatherdBuffer(CustomTestCase):
         metrics = run_eval_few_shot_gsm8k(args)
         print(metrics)
 
-        self.assertGreater(metrics["accuracy"], 0.60)
+        self.assertGreater(metrics["accuracy"], 0.62)
 
 
 class TestTBO(CustomTestCase):
@@ -238,10 +236,10 @@ class TestTBO(CustomTestCase):
         metrics = run_eval_few_shot_gsm8k(args)
         print(metrics)
 
-        self.assertGreater(metrics["accuracy"], 0.60)
+        self.assertGreater(metrics["accuracy"], 0.62)
 
 
-@unittest.skip("covered in TestMTPWithTBO")
+# @unittest.skip("covered in TestMTPWithTBO")
 class TestMTP(CustomTestCase):
     @classmethod
     def setUpClass(cls):
@@ -282,6 +280,8 @@ class TestMTP(CustomTestCase):
         kill_process_tree(cls.process.pid)
 
     def test_gsm8k(self):
+        requests.get(self.base_url + "/flush_cache")
+
         args = SimpleNamespace(
             num_shots=5,
             data_path=None,
@@ -352,6 +352,8 @@ class TestMTPWithTBO(CustomTestCase):
         kill_process_tree(cls.process.pid)
 
     def test_gsm8k(self):
+        requests.get(self.base_url + "/flush_cache")
+
         args = SimpleNamespace(
             num_shots=5,
             data_path=None,

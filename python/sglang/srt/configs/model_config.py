@@ -21,7 +21,6 @@ from typing import List, Optional, Set, Union
 
 import torch
 from transformers import PretrainedConfig
-
 from sglang.srt.hf_transformers_utils import (
     get_config,
     get_context_length,
@@ -53,7 +52,7 @@ class ModelConfig:
         trust_remote_code: bool = True,
         revision: Optional[str] = None,
         context_length: Optional[int] = None,
-        model_override_args: str = "{}",
+        model_override_args: Optional[str] = None,
         is_embedding: Optional[bool] = None,
         enable_multimodal: Optional[bool] = None,
         dtype: str = "auto",
@@ -61,13 +60,13 @@ class ModelConfig:
         override_config_file: Optional[str] = None,
         is_draft_model: bool = False,
         hybrid_kvcache_ratio: Optional[float] = None,
-        model_impl: Union[str, ModelImpl] = ModelImpl.AUTO,
+        impl: Union[str, ModelImpl] = ModelImpl.AUTO,
     ) -> None:
 
         self.model_path = model_path
         self.revision = revision
         self.quantization = quantization
-        self.model_impl = model_impl
+        self.impl = impl
 
         # Parse args
         self.maybe_pull_model_tokenizer_from_remote()
@@ -293,7 +292,7 @@ class ModelConfig:
             dtype=server_args.dtype,
             quantization=server_args.quantization,
             hybrid_kvcache_ratio=server_args.hybrid_kvcache_ratio,
-            model_impl=server_args.model_impl,
+            impl=server_args.impl,
             **kwargs,
         )
 
@@ -398,7 +397,6 @@ class ModelConfig:
             "compressed-tensors",
             "fbgemm_fp8",
             "w8a8_fp8",
-            "petit_nvfp4",
         ]
         optimized_quantization_methods = [
             "fp8",
@@ -416,11 +414,9 @@ class ModelConfig:
             "moe_wna16",
             "qoq",
             "w4afp8",
-            "petit_nvfp4",
         ]
         compatible_quantization_methods = {
             "modelopt_fp4": ["modelopt"],
-            "petit_nvfp4": ["modelopt"],
             "w8a8_int8": ["compressed-tensors", "compressed_tensors"],
             "w8a8_fp8": ["compressed-tensors", "compressed_tensors"],
         }
